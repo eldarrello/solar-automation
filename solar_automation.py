@@ -3,8 +3,8 @@ import json
 import logging
 import os
 import pytz
-from typing import Dict, List, Optional, Tuple
-from nordpool import elspot
+import requests
+from typing import Dict, List, Optional
 from flask import Flask, jsonify
 
 # Configuration
@@ -12,6 +12,7 @@ AREA_CODE = 'EE'  # Estonia
 LOW_PRICE_THRESHOLD = 7  # EUR/MWh
 DATA_FILE = 'nordpool_data.json'
 TIMEZONE = 'Europe/Tallinn'
+NORDPOOL_API = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices'
 
 # Setup logging
 logging.basicConfig(
@@ -24,19 +25,28 @@ def fetch_daily_prices() -> Optional[Dict]:
     """Fetch today's electricity prices from Nord Pool"""
     try:
         today = datetime.datetime.now(pytz.timezone(TIMEZONE)).date()
-        # Initialize NordPool client
-        spot_client = elspot.Prices(currency='EUR')
-        data = spot_client.hourly(end_date=today, areas=[AREA_CODE])
+        params = {
+            "date": today.isoformat(),
+            "market": 'DayAhead',
+            "deliveryArea": AREA_CODE,
+            "currency": "EUR"
+        }
+        response = requests.get(NORDPOOL_API, params=params, timeout=10)
+        if response.status_code != 200:
+            logging.error(f"Error fetching prices: {response.text} {response.status_code}")
+            return None
 
-        if not data or 'areas' not in data or AREA_CODE not in data['areas']:
-            logging.error("No price data received from Nord Pool")
+        data = json.loads(response.text)
+        if not data or 'multiAreaEntries' not in data:
+            logging.error(f"Not expected data from nordpool")
             return None
 
         # Extract prices for our area
         prices = []
-        for entry in data['areas'][AREA_CODE]['values']:
-            hour_start = entry['start'].replace(tzinfo=datetime.timezone.utc).astimezone(tz=pytz.timezone(TIMEZONE))
-            price = entry['value']
+        for entry in data['multiAreaEntries']:
+            dt = datetime.datetime.fromisoformat(entry['deliveryStart'].replace('Z',''))
+            hour_start = dt.replace(tzinfo=datetime.timezone.utc).astimezone(tz=pytz.timezone(TIMEZONE))
+            price = entry['entryPerArea'][AREA_CODE]
             prices.append((hour_start, price))
 
         logging.info(f"Successfully fetched prices for {today}")
@@ -287,9 +297,8 @@ def create_flask_app():
 
     return app
 
+app = create_flask_app()
 if __name__ == "__main__":
-    # For running as a web app on PythonAnywhere
-    app = create_flask_app()
+    # For running locally
     app.run(host='0.0.0.0', port = 80)
-else:
-    app = create_flask_app()
+
