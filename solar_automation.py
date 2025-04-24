@@ -13,6 +13,11 @@ LOW_PRICE_THRESHOLD = 7  # EUR/MWh
 DATA_FILE = 'nordpool_data.json'
 TIMEZONE = 'Europe/Tallinn'
 NORDPOOL_API = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices'
+SOLAX_CLOUD_API = 'https://global.solaxcloud.com/app_api/settingnew/paramSet'
+SOLAX_EXPORT_LIMIT_REG_NO = 48  # Valid for X3-Hybrid-G4
+SOLAX_REG_NO = os.environ.get('SOLAX_REG_NO')
+SOLAX_SERIAL = os.environ.get('SOLAX_SERIAL')
+SOLAX_TOKEN_ID = os.environ.get('SOLAX_TOKEN_ID')
 
 # Setup logging
 logging.basicConfig(
@@ -155,6 +160,7 @@ def find_optimal_off_period(data: Dict) -> Optional[Dict]:
     # Only return if there's actual benefit
     return best_period if best_period['financial_impact'] > 0 else None
 
+
 def determine_daily_schedule(data: Dict) -> Optional[Dict]:
     """Determine the optimal off/on schedule for the day."""
     if not data or 'prices' not in data:
@@ -214,6 +220,29 @@ def check_for_scheduled_actions() -> Optional[Dict]:
 
     return None
 
+
+def set_export_limit_via_solax_cloud(limit) -> bool:
+    """Set export limit on Solax inverter """
+    try:
+        params = {
+            "optType": "setReg",
+            "sn": SOLAX_REG_NO,
+            "inverterSn": SOLAX_SERIAL,
+            "tokenId": SOLAX_TOKEN_ID,
+            "num": 1,
+            "Data": json.dumps([{"reg":SOLAX_EXPORT_LIMIT_REG_NO,"val":limit}], separators=(',', ':'))
+        }
+        response = requests.post(SOLAX_CLOUD_API, params=params, timeout=10)
+
+        if response.status_code == 200 and '\"success\":true' in response.text.lower():
+            logging.info(f"Successfully set export limit to {limit}")
+            return True
+
+    except Exception as e:
+        logging.error(f"Export control error: {str(e) + response.text}")
+        return False
+
+
 def create_flask_app():
     """Create a Flask web application for the price monitor."""
     app = Flask(__name__)
@@ -257,8 +286,12 @@ def create_flask_app():
 
                 logging.info(f"Triggering action: {trigger_action}")
 
-                # Update current state in cache
-                cached_data['current_state'] = 'off' if trigger_action.get('action') == 'off' else 'on'
+                limit = 3000 if trigger_action.get('action') == 'on' else 0  # 3000 - 30000W
+                success = set_export_limit_via_solax_cloud(limit)
+                if success:
+                    # Update current state in cache
+                    cached_data['current_state'] = 'off' if trigger_action.get('action') == 'off' else 'on'
+
                 cached_data['last_trigger'] = {
                     'time': datetime.datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
                     'action': trigger_action.get('action'),
@@ -267,7 +300,7 @@ def create_flask_app():
                 save_data_to_cache(cached_data)
 
                 return jsonify({
-                    'status': 'success',
+                    'status': 'success' if success else 'failed',
                     'action': trigger_action,
                     'message': f"Action triggered: {trigger_action['action']}",
                     'retry': trigger_action.get('retry', False)
@@ -296,6 +329,7 @@ def create_flask_app():
         })
 
     return app
+
 
 app = create_flask_app()
 if __name__ == "__main__":
