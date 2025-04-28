@@ -6,6 +6,8 @@ import pytz
 import requests
 from typing import Dict, List, Optional
 from flask import Flask, jsonify
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 
 # Configuration
 AREA_CODE = 'EE'  # Estonia
@@ -237,6 +239,9 @@ def set_export_limit_via_solax_cloud(limit) -> bool:
         if response.status_code == 200 and '\"success\":true' in response.text.lower():
             logging.info(f"Successfully set export limit to {limit}")
             return True
+        else:
+            logging.error(f"Failed to set export limit to {limit} {response} {response.text}")
+            return False
 
     except Exception as e:
         logging.error(f"Export control error: {str(e) + response.text}")
@@ -332,7 +337,20 @@ def create_flask_app():
 
 
 app = create_flask_app()
+
 if __name__ == "__main__":
     # For running locally
+
+    def scheduled_task():
+        with app.test_client() as client:
+            response = client.get('/check-prices')
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=scheduled_task, trigger="interval", seconds=3600)
+    scheduler.start()
+
+    # Shut down the scheduler when exiting the app
+    atexit.register(lambda: scheduler.shutdown())
+
     app.run(host='0.0.0.0', port = 80)
 
