@@ -7,6 +7,7 @@ import requests
 from typing import Dict, List, Optional
 from flask import Flask, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 import atexit
 
 # Configuration
@@ -346,7 +347,12 @@ if __name__ == "__main__":
             response = client.get('/check-prices')
 
     scheduler = BackgroundScheduler()
-    scheduler.add_job(func=scheduled_task, trigger="interval", seconds=3600)
+    # Schedule to run at every hour
+    scheduler.add_job(
+        func=scheduled_task,
+        trigger=CronTrigger(minute=0),
+        misfire_grace_time=60  # Allow 60 seconds of leeway if missed
+    )
     scheduler.start()
 
     # Shut down the scheduler when exiting the app
